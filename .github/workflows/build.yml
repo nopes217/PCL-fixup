@@ -1,0 +1,99 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'Plain Craft Launcher 2/**'
+      - 'PCLCS/**'
+      - 'MeloongCore/**'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - 'Plain Craft Launcher 2/**'
+      - 'PCLCS/**'
+      - 'MeloongCore/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        configuration: [Release]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Update Help Resources
+        shell: pwsh
+        run: |
+          $helpRepo = Join-Path $env:RUNNER_TEMP "PCL2Help"
+          git clone https://github.com/LTCatt/PCL2Help.git -b master --single-branch --depth 1 $helpRepo
+          if (Test-Path $helpRepo) {
+            Compress-Archive -Path (Join-Path $helpRepo '*') -DestinationPath "Plain Craft Launcher 2\Resources\Help.zip" -Force
+          }
+
+      - name: Inject Secrets (optional)
+        shell: pwsh
+        run: |
+          $clientId = "${{ secrets.CLIENT_ID }}"
+          $cfKey    = "${{ secrets.CURSEFORGE_API_KEY }}"
+
+          if ($clientId) {
+            $p = "Plain Craft Launcher 2\Modules\ModSecret.vb"
+            $c = Get-Content $p -Raw -Encoding UTF8
+            $c = $c -replace '(?s)(Public OAuthClientId As String = If\(\s*Not String\.IsNullOrWhiteSpace\(Environment\.GetEnvironmentVariable\("PCL_MS_CLIENT_ID"\)\),\s*Environment\.GetEnvironmentVariable\("PCL_MS_CLIENT_ID"\),\s*")[^"]*(")', "`${1}$clientId`${2}"
+            Set-Content $p $c -Encoding UTF8 -NoNewline
+          }
+
+          if ($cfKey) {
+            $p = "Plain Craft Launcher 2\Modules\ModSecret.vb"
+            $c = Get-Content $p -Raw -Encoding UTF8
+            $c = $c -replace '(Public CurseForgeAPIKey As String = If\(Environment\.GetEnvironmentVariable\("PCL_CURSEFORGE_API_KEY"\), ")[^"]*(")', "`${1}$cfKey`${2}"
+            Set-Content $p $c -Encoding UTF8 -NoNewline
+          }
+
+          $p2 = "Plain Craft Launcher 2\Modules\Base\ModBase.vb"
+          if (Test-Path $p2) {
+            $c2 = Get-Content $p2 -Raw -Encoding UTF8
+            $c2 = $c2 -replace 'Public Const CommitHash As String = "[^"]*"', "Public Const CommitHash As String = ""$env:GITHUB_SHA"""
+            Set-Content $p2 $c2 -Encoding UTF8 -NoNewline
+          }
+
+      - name: Build Dependencies
+        shell: pwsh
+        run: |
+          dotnet build "MeloongCore\Shared\MeloongCore.csproj" -c ${{ matrix.configuration }}
+          dotnet build "MeloongCore\Wpf\MeloongCore.Wpf.csproj" -c ${{ matrix.configuration }}
+          dotnet build "PCLCS\PCLCS.csproj" -c ${{ matrix.configuration }}
+
+      - name: Build Launcher
+        shell: pwsh
+        run: |
+          msbuild "Plain Craft Launcher 2\Plain Craft Launcher 2.vbproj" `
+            -p:Configuration=${{ matrix.configuration }} `
+            -p:Platform=AnyCPU `
+            -v:minimal
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCL-${{ matrix.configuration }}
+          path: Plain Craft Launcher 2\bin\Plain Craft Launcher 2.exe
+          if-no-files-found: error
