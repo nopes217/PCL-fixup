@@ -360,3 +360,7 @@ obj/
 *.local.json
 *.bak
 *.bak-*
+
+# 发布压缩包
+*.zip
+_release/
